@@ -16,7 +16,7 @@
 		"Other"
 	],
 	"activationEvents": [
-		"onLanguage:plaintext"
+		"onLanguage:lua"
 	],
 	"main": "./out/src/extension",
 	"contributes": {

@@ -5,10 +5,12 @@
 'use strict';
 
 import {
-	IPCMessageReader, IPCMessageWriter, createConnection, IConnection, TextDocuments, TextDocument, 
-	Diagnostic, DiagnosticSeverity, InitializeResult, TextDocumentPositionParams, CompletionItem, 
-	CompletionItemKind
+	IPCMessageReader, IPCMessageWriter, createConnection, IConnection, TextDocuments, 
+	InitializeResult, TextDocumentPositionParams ,Location,
+	DocumentSymbolParams,SymbolInformation
 } from 'vscode-languageserver';
+
+var parser  = require('@xxxg0001/luaparse');
 
 // Create a connection for the server. The connection uses Node's IPC as a transport
 let connection: IConnection = createConnection(new IPCMessageReader(process), new IPCMessageWriter(process));
@@ -29,10 +31,9 @@ connection.onInitialize((params): InitializeResult => {
 		capabilities: {
 			// Tell the client that the server works in FULL text document sync mode
 			textDocumentSync: documents.syncKind,
-			// Tell the client that the server support code complete
-			completionProvider: {
-				resolveProvider: true
-			}
+			// Tell the client that the server support goto xxx
+			documentSymbolProvider:true,
+			definitionProvider: true
 		}
 	}
 });
@@ -40,7 +41,9 @@ connection.onInitialize((params): InitializeResult => {
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent((change) => {
-	validateTextDocument(change.document);
+	let content = documents.get(change.document.uri).getText();
+	var ast = parser.parse(content, {comments:false, locations:true, luaversion:5.3});
+	console.log(JSON.stringify(ast));
 });
 
 // The settings interface describe the server relevant settings part
@@ -51,80 +54,33 @@ interface Settings {
 // These are the example settings we defined in the client's package.json
 // file
 interface ExampleSettings {
-	maxNumberOfProblems: number;
+	luaVersion: number;
 }
 
-// hold the maxNumberOfProblems setting
-let maxNumberOfProblems: number;
+// hold the luaVersion setting
+let luaVersion: number;
 // The settings have changed. Is send on server activation
 // as well.
 connection.onDidChangeConfiguration((change) => {
 	let settings = <Settings>change.settings;
-	maxNumberOfProblems = settings.lspSample.maxNumberOfProblems || 100;
-	// Revalidate any open text documents
-	documents.all().forEach(validateTextDocument);
+	luaVersion = settings.lspSample.luaVersion;
 });
-
-function validateTextDocument(textDocument: TextDocument): void {
-	let diagnostics: Diagnostic[] = [];
-	let lines = textDocument.getText().split(/\r?\n/g);
-	let problems = 0;
-	for (var i = 0; i < lines.length && problems < maxNumberOfProblems; i++) {
-		let line = lines[i];
-		let index = line.indexOf('typescript');
-		if (index >= 0) {
-			problems++;
-			diagnostics.push({
-				severity: DiagnosticSeverity.Warning,
-				range: {
-					start: { line: i, character: index },
-					end: { line: i, character: index + 10 }
-				},
-				message: `${line.substr(index, 10)} should be spelled TypeScript`,
-				source: 'ex'
-			});
-		}
-	}
-	// Send the computed diagnostics to VSCode.
-	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-}
 
 connection.onDidChangeWatchedFiles((_change) => {
 	// Monitored files have change in VSCode
 	connection.console.log('We recevied an file change event');
 });
 
+connection.onDocumentSymbol((documentSymbolParams:DocumentSymbolParams): SymbolInformation[] =>{
+	connection.console.log('We recevied an onDocumentSymbol event');
+	console.log(JSON.stringify(documentSymbolParams));
+	return [];
+})
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion((_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-	// The pass parameter contains the position of the text document in 
-	// which code complete got requested. For the example we ignore this
-	// info and always provide the same completion items.
-	return [
-		{
-			label: 'TypeScript',
-			kind: CompletionItemKind.Text,
-			data: 1
-		},
-		{
-			label: 'JavaScript',
-			kind: CompletionItemKind.Text,
-			data: 2
-		}
-	]
-});
-
-// This handler resolve additional information for the item selected in
-// the completion list.
-connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
-	if (item.data === 1) {
-		item.detail = 'TypeScript details',
-			item.documentation = 'TypeScript documentation'
-	} else if (item.data === 2) {
-		item.detail = 'JavaScript details',
-			item.documentation = 'JavaScript documentation'
-	}
-	return item;
+connection.onDefinition((textDocumentPositionParams: TextDocumentPositionParams): Location[] => {
+	connection.console.log('We recevied an onDefinition event');
+	console.log(JSON.stringify(textDocumentPositionParams));
+	return [];
 });
 
 /*
