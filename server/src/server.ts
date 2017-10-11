@@ -6,8 +6,8 @@
 
 import {
 	IPCMessageReader, IPCMessageWriter, createConnection, IConnection, TextDocuments, 
-	InitializeResult, TextDocumentPositionParams ,Location,
-	DocumentSymbolParams,SymbolInformation
+	InitializeResult, TextDocumentPositionParams, DidSaveTextDocumentParams,
+	DocumentSymbolParams, SymbolInformation, Location, Range
 } from 'vscode-languageserver';
 
 var parser  = require('@xxxg0001/luaparse');
@@ -38,13 +38,164 @@ connection.onInitialize((params): InitializeResult => {
 	}
 });
 
+class Identifier {
+	name:string;
+	base:string;
+	range:Range;
+}
+
+class LuaFileInfo {
+	path:string;
+	changed:boolean;
+	identifiers:Identifier[];
+	symbolList:SymbolInformation[];
+	symbolDict:{ [key:string]:SymbolInformation; }
+
+	constructor(path:string) {
+		this.path = path;
+		this.changed = true;
+		this.identifiers = [];
+		this.symbolList = [];
+		this.symbolDict = {};
+	}
+
+	cleanSymbol() {
+		this.identifiers = [];
+		this.symbolList = [];
+		this.symbolDict = {};
+	}
+
+	insertSymbol(symbol:SymbolInformation) {
+		this.symbolList.push(symbol);
+		this.symbolDict[symbol.name] = symbol;
+	}
+}
+
+let luaFileDict:{[key:string]:LuaFileInfo} = {};
+
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent((change) => {
-	let content = documents.get(change.document.uri).getText();
-	var ast = parser.parse(content, {comments:false, locations:true, luaversion:5.3});
-	console.log(JSON.stringify(ast));
+	let path = uniformPath(change.document.uri);
+	let luaFile = luaFileDict[path];
+	if (luaFile) {
+		luaFile.changed = true;
+		return;
+	}
 });
+
+function uniformPath(uri:string):string {
+	let path:string = decodeURIComponent(uri);
+	path = path.replace(/\w:/g, (matchedStr) => {
+		return matchedStr.toLowerCase();
+	});
+	path = path.replace(/\\/g, '/');
+	return path;
+}
+
+function refreshFile(uri:string):void {
+	let path = uniformPath(uri);
+	let luaFile = luaFileDict[path];
+	if (!luaFile) {
+		luaFile = new LuaFileInfo(path);
+		luaFileDict[path] = luaFile;
+	}
+
+	if (luaFile.changed) {
+		luaFile.cleanSymbol();
+		parseFile(uri);
+		connection.console.log(JSON.stringify(luaFile));
+	}
+}
+
+function parseFile(uri:string):void {
+	let path = uniformPath(uri);
+	let luaFile = luaFileDict[path];
+	let content = documents.get(uri).getText();
+	let ast = parser.parse(content, {comments:false, locations:true});
+	parseNode(luaFile, [], ast);
+	luaFile.changed = false;
+}
+
+function getRange(node:any):any {
+	return  {
+		start:{line:node.loc.start.line - 1, character:node.loc.start.column},
+		end:{line:node.loc.end.line - 1, character:node.loc.end.column}
+	};
+}
+
+function parseNode(luaFile:LuaFileInfo, parents:any[], node:any):void {
+	switch (node.type) {
+	case "Identifier":
+		let identifier = {
+			base:"",
+			name:node.name,
+			range:getRange(node)
+		}
+		luaFile.identifiers.push(identifier);
+		break;
+	case "FunctionDeclaration":
+		if (node.identifier != null) {
+			let name = node.identifier.name;
+			let symbol = SymbolInformation.create(name, 12, getRange(node), luaFile.path);
+			luaFile.insertSymbol(symbol);
+		}
+		if (node.body != null) {
+			for (var i=0; i < node.body.length; i++) {
+				var stack = [node].concat(parents);
+				parseNode(luaFile, stack, node.body[i]);	
+			}
+		}
+		break;
+	case "CallStatement":
+		parseNode(luaFile, parents, node.expression);
+		break
+	case "CallExpression":
+		parseNode(luaFile, parents, node.base);
+		if (node.arguments != null) {
+			for (var i=0; i < node.arguments.length; i++) {
+				parseNode(luaFile, parents, node.arguments[i]);
+			}
+		}
+		break;
+	default:
+		if (node.identifier != null) {
+			parseNode(luaFile, parents, node.identifier);
+		}
+		if (node.body != null) {
+			for (var i=0; i < node.body.length; i++) {
+				parseNode(luaFile, parents, node.body[i]);
+			}
+		}
+	}
+}
+
+function selectIdent(uri:string, line:number, character:number):Identifier {
+	let path = uniformPath(uri);
+	let luaFile = luaFileDict[path];
+	for (var i=0; i < luaFile.identifiers.length; i++) {
+		let identifier = luaFile.identifiers[i];
+		if (identifier.range.start.line <= line && line <= identifier.range.end.line)
+		{
+			if (identifier.range.start.character <= character && character <= identifier.range.end.character)
+			{
+				return identifier
+			}
+		}
+	}
+	return null;
+}
+
+function searchIdent(uri:string, identifier:Identifier):Location[] {
+	let locations = []
+	let path = uniformPath(uri);
+	let luaFile = luaFileDict[path];
+	let symbol = luaFile.symbolDict[identifier.name];
+	if (symbol != null) {
+		locations.push(symbol.location);
+	}
+	return locations;
+}
 
 // The settings interface describe the server relevant settings part
 interface Settings {
@@ -71,16 +222,29 @@ connection.onDidChangeWatchedFiles((_change) => {
 	connection.console.log('We recevied an file change event');
 });
 
-connection.onDocumentSymbol((documentSymbolParams:DocumentSymbolParams): SymbolInformation[] =>{
+connection.onDocumentSymbol((params:DocumentSymbolParams): SymbolInformation[] =>{
+	refreshFile(params.textDocument.uri);
 	connection.console.log('We recevied an onDocumentSymbol event');
-	console.log(JSON.stringify(documentSymbolParams));
-	return [];
+	console.log(JSON.stringify(params));
+	let path = uniformPath(params.textDocument.uri);
+	let luaFile = luaFileDict[path];
+	return luaFile.symbolList;
 })
 
-connection.onDefinition((textDocumentPositionParams: TextDocumentPositionParams): Location[] => {
+connection.onDefinition((params: TextDocumentPositionParams): Location[] => {
+	refreshFile(params.textDocument.uri);
 	connection.console.log('We recevied an onDefinition event');
-	console.log(JSON.stringify(textDocumentPositionParams));
-	return [];
+	console.log(JSON.stringify(params));
+	let identifier = selectIdent(params.textDocument.uri, params.position.line, params.position.character);
+	if (identifier == null) {
+		console.log("onDefinition can not find identifier")
+		return [];
+	}
+	return searchIdent(params.textDocument.uri, identifier);
+});
+
+connection.onDidSaveTextDocument((params:DidSaveTextDocumentParams) =>{
+	refreshFile(params.textDocument.uri);
 });
 
 /*
