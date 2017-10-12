@@ -143,12 +143,46 @@ function getRange(node:any):any {
 function parseNode(luaFile:LuaFileInfo, parents:any[], node:any):void {
 	switch (node.type) {
 	case "Identifier":
-		let identifier = {
+		let identifier1 = {
 			base:"",
 			name:node.name,
 			range:getRange(node)
 		}
-		luaFile.identifiers.push(identifier);
+		luaFile.identifiers.push(identifier1);
+		break;
+	case "IndexExpression":
+		if (node.base != null) {
+			parseNode(luaFile, parents, node.base);			
+		}
+		if (node.index != null) {
+			parseNode(luaFile, parents, node.index);
+		}
+		break;
+	case "MemberExpression":
+		if (node.base.type == "IndexExpression") {
+			parseNode(luaFile, parents, node.base);
+			break;
+		}
+
+		let identifier2 = {
+			base:node.base.name,
+			name:node.identifier.name,
+			range:getRange(node)
+		}
+		luaFile.identifiers.push(identifier2);
+		break;
+	case "LocalStatement":
+	case "AssignmentStatement":
+		if (node.variables != null) {
+			for (var i=0; i < node.variables.length; i++) {
+				parseNode(luaFile, parents, node.variables[i]);
+			}
+		}
+		if (node.init != null) {
+			for (var i=0; i < node.init.length; i++) {
+				parseNode(luaFile, parents, node.init[i]);
+			}
+		}
 		break;
 	case "FunctionDeclaration":
 		if (node.identifier != null) {
@@ -174,6 +208,44 @@ function parseNode(luaFile:LuaFileInfo, parents:any[], node:any):void {
 			}
 		}
 		break;
+	case "ReturnStatement":
+		if (node.arguments != null) {
+			for (var i=0; i < node.arguments.length; i++) {
+				parseNode(luaFile, parents, node.arguments[i]);
+			}
+		}
+		break;
+	case "BinaryExpression":
+	case "LogicalExpression":
+		if (node.left != null) {
+			parseNode(luaFile, parents, node.left);
+		}
+		if (node.right != null) {
+			parseNode(luaFile, parents, node.right);
+		}
+		break;
+	case "UnaryExpression":
+		if (node.argument != null) {
+			parseNode(luaFile, parents, node.argument);
+		}
+		break;
+	case "IfStatement":
+		if (node.clauses != null) {
+			for (var i=0; i < node.clauses.length; i++) {
+				parseNode(luaFile, parents, node.clauses[i]);
+			}
+		}
+		break;
+	case "DoStatement":
+	case "RepeatStatement":
+	case "WhileStatement":
+	case "IfClause":
+	case "ElseifClause":
+		if (node.condition != null) {
+			parseNode(luaFile, parents, node.condition);
+		}
+	case "ElseClause":
+	case "Chunk":
 	default:
 		if (node.identifier != null) {
 			parseNode(luaFile, parents, node.identifier);
