@@ -187,6 +187,9 @@ function parseNode(luaFile:LuaFileInfo, parents:any[], node:any):void {
 	case "FunctionDeclaration":
 		if (node.identifier != null) {
 			let name = node.identifier.name;
+			if (node.identifier.type == "MemberExpression") {
+				name = node.identifier.identifier.name
+			}
 			let symbol = SymbolInformation.create(name, 12, getRange(node), luaFile.uri);
 			luaFile.insertSymbol(symbol);
 		}
